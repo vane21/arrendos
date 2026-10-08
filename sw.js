@@ -1,5 +1,5 @@
 // Guarda la app en el iPhone para que abra sin Internet. Cambiar VERSION en cada actualización.
-const VERSION = 'arrendos-0.2.1';
+const VERSION = 'arrendos-0.2.2';
 const ARCHIVOS = ['./', 'index.html', 'manifest.webmanifest', 'css/app.css', 'js/main.js', 'js/db.js', 'js/ui.js',
   'js/vistas.js', 'js/calculos.js', 'js/copias.js', 'js/formato.js', 'js/registros.js', 'js/formularios.js',
   'iconos/icono-180.png', 'iconos/icono-192.png', 'iconos/icono-512.png'];
