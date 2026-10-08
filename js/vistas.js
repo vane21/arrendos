@@ -126,12 +126,13 @@ export function vistaInicio(ctx, ir, estado, acciones) {
         <button class="boton secundario" data-accion="arrendamiento">${iconos.mas}<span>Nuevo arrendamiento</span></button>
         <button class="boton secundario pequeno" data-accion="gasto">${iconos.mas}<span>Gasto</span></button>
         <button class="boton secundario pequeno" data-accion="prestamo">${iconos.mas}<span>Préstamo</span></button>
+        <button class="boton secundario pequeno ancho-total" data-accion="devolucion">${iconos.mas}<span>Devolver préstamo</span></button>
       </div>
       <section class="indicadores">
         <div class="indicador"><span class="rotulo">Arriendo esperado al mes</span><strong>${pesos(R.totalArriendoMensualEsperado)}</strong><small>${activos.length} activos${porIniciar ? ` y ${porIniciar} por iniciar` : ''} de ${datos.inmuebles.length} inmuebles</small></div>
         <div class="indicador"><span class="rotulo">Recibido en ${nombreMes(mes.mes).split(' ')[0].toLowerCase()}</span><strong>${pesos(mes.recibido)}</strong><small>${mes.pagos} ${mes.pagos === 1 ? 'pago' : 'pagos'}</small></div>
         <div class="indicador"><span class="rotulo">Por cobrar este mes</span><strong>${pesos(porCobrarMes)}</strong><small>${deuda ? `Deuda atrasada ${pesos(deuda)}` : 'Nadie tiene deuda'}</small></div>
-        <div class="indicador"><span class="rotulo">Préstamos por cobrar</span><strong>${pesos(R.prestamosPendientes)}</strong><small>${datos.prestamos.filter((x) => x.estado === 'pendiente').length} pendientes</small></div>
+        <div class="indicador"><span class="rotulo">Préstamos por cobrar</span><strong>${pesos(R.prestamosPendientes)}</strong><small>${C.estadoPrestamos(datos).pendientes} pendientes</small></div>
       </section>
       <section>
         <div class="titulo-seccion"><h2>Próximos pagos</h2><button class="boton-texto" data-ir="arriendos" data-filtro="alerta">Ver pendientes (${conAlerta})</button></div>
@@ -144,7 +145,8 @@ export function vistaInicio(ctx, ir, estado, acciones) {
       <button class="boton secundario ancho" data-ir="movimientos">Ver historial de movimientos</button>`,
     alMontar(raiz) {
       const abrir = { pago: () => F.formularioPago(ctx, acciones), arrendamiento: () => F.formularioArrendamiento(ctx, acciones),
-        gasto: () => F.formularioGasto(ctx, acciones), prestamo: () => F.formularioPrestamo(ctx, acciones) };
+        gasto: () => F.formularioGasto(ctx, acciones), prestamo: () => F.formularioPrestamo(ctx, acciones),
+        devolucion: () => F.formularioDevolucion(ctx, acciones) };
       raiz.querySelectorAll('[data-accion]').forEach((b) => b.onclick = abrir[b.dataset.accion]);
       raiz.querySelectorAll('[data-ir]').forEach((b) => b.onclick = () => ir(b.dataset.ir, { filtro: b.dataset.filtro }));
       raiz.querySelectorAll('[data-contrato]').forEach((f) => f.onclick = () => detalleContrato(ctx, acciones, f.dataset.contrato));
@@ -270,6 +272,7 @@ export function vistaMovimientos(ctx, ir, estado = {}, acciones) {
       ${cabecera('Movimientos', 'Historial completo de pagos recibidos, gastos y préstamos, agrupado por mes. Toca un registro para editarlo.')}
       <div class="segmentos" role="tablist">${TIPOS.map(([k, t]) => `<button role="tab" class="segmento" aria-selected="${k === tipo}" data-tipo="${k}">${t}</button>`).join('')}</div>
       <button class="boton principal ancho" id="nuevo-mov">${iconos.mas}<span></span></button>
+      <div id="resumen-prestamos"></div>
       <label class="buscador">${iconos.buscar}<input id="buscar-mov" type="search" placeholder="Buscar por inmueble, concepto, cuenta o mes" value="${esc(estado.texto || '')}"></label>
       <div id="lista-mov"></div>`,
     alMontar(raiz) {
@@ -283,33 +286,60 @@ export function vistaMovimientos(ctx, ir, estado = {}, acciones) {
         gastos: () => ctx.datos.gastos.map((g) => ({ id: g.id, fecha: g.fecha, valor: g.valor, signo: 'negativo', titulo: g.concepto,
           sub: [g.inmuebleId ? ctx.inmuebles[g.inmuebleId].nombre : 'General', cuenta(g.cuentaId)].join(' · '),
           nota: g.observaciones, chip: chip(CATEGORIA[g.categoria] || 'Sin categoría', g.categoria ? 'neutro' : 'aviso') })),
-        prestamos: () => ctx.datos.prestamos.map((x) => ({ id: x.id, fecha: x.fecha, valor: x.valor, signo: 'negativo', titulo: x.motivo,
-          sub: `Salió de ${cuenta(x.cuentaSalidaId)}${x.estado === 'pagado' ? ` · volvió a ${cuenta(x.cuentaDevolucionId)} el ${fechaCorta(x.fechaDevolucion)}` : ''}`,
-          nota: [x.detalleValor ? `Suma: ${x.detalleValor}` : '', x.observaciones].filter(Boolean).join(' · '),
-          chip: chip(x.estado === 'pagado' ? 'Devuelto' : 'Pendiente', x.estado === 'pagado' ? 'bien' : 'aviso'),
-          devolver: x.estado === 'pendiente' })),
+        prestamos: () => {
+          const P = C.estadoPrestamos(ctx.datos);
+          const estado = (x) => {
+            if (x.estado === 'pagado') return chip('Devuelto', 'bien');
+            const r = P.porId[x.id];
+            if (r.cubierto) return chip('Devuelto', 'bien');
+            return chip(r.abonado ? `Faltan ${pesos(r.falta)}` : 'Pendiente', 'aviso');
+          };
+          return [
+            ...ctx.datos.prestamos.map((x) => ({ id: x.id, fecha: x.fecha, valor: x.valor, signo: 'negativo', titulo: x.motivo,
+              sub: `Salió de ${cuenta(x.cuentaSalidaId)}${x.estado === 'pagado' ? ` · volvió a ${cuenta(x.cuentaDevolucionId)} el ${fechaCorta(x.fechaDevolucion)}` : ''}`,
+              nota: [x.detalleValor ? `Suma: ${x.detalleValor}` : '', x.observaciones].filter(Boolean).join(' · '),
+              chip: estado(x) })),
+            ...(ctx.datos.devoluciones || []).map((d) => ({ id: d.id, fecha: d.fecha, valor: d.valor, signo: 'positivo', esDevolucion: true,
+              titulo: 'Devolución de préstamos', sub: `Llegó a ${cuenta(d.cuentaId)}`, nota: d.observaciones, chip: chip('Devolución', 'bien') })),
+          ];
+        },
       };
-      const abrirRegistro = (t, id, devolver) => {
+      const abrirRegistro = (t, id) => {
         if (t === 'pagos') F.formularioPago(ctx, acciones, { pago: ctx.datos.pagos.find((p) => p.id === id) });
         if (t === 'gastos') F.formularioGasto(ctx, acciones, ctx.datos.gastos.find((g) => g.id === id));
-        if (t === 'prestamos') F.formularioPrestamo(ctx, acciones, ctx.datos.prestamos.find((x) => x.id === id), { devolver });
+        if (t === 'prestamos') {
+          const dev = (ctx.datos.devoluciones || []).find((d) => d.id === id);
+          if (dev) F.formularioDevolucion(ctx, acciones, dev);
+          else F.formularioPrestamo(ctx, acciones, ctx.datos.prestamos.find((x) => x.id === id));
+        }
       };
       const pintar = () => {
         const t = raiz.querySelector('.segmento[aria-selected="true"]').dataset.tipo;
         estado.tipo = t;
         estado.texto = raiz.querySelector('#buscar-mov').value;
         raiz.querySelector('#nuevo-mov span').textContent = TIPOS.find(([k]) => k === t)[2];
+        const resumenP = raiz.querySelector('#resumen-prestamos');
+        if (t === 'prestamos') {
+          const P = C.estadoPrestamos(ctx.datos);
+          resumenP.innerHTML = `<section class="tarjeta">
+            <div class="linea"><span><b>Por devolver</b></span><span class="valor"><b>${pesos(P.porDevolver)}</b></span></div>
+            <div class="linea"><span>Ya devuelto con abonos</span><span class="valor positivo">${pesos(P.totalDevuelto)}</span></div>
+            <button class="boton secundario ancho" id="nueva-devolucion" ${P.porDevolver ? '' : 'disabled'}>${iconos.mas}<span>Registrar devolución</span></button>
+            <p class="nota">Devuelve por partes o todo, a la cuenta que quieras. Se abona primero a los préstamos más antiguos.</p>
+          </section>`;
+          resumenP.querySelector('#nueva-devolucion').onclick = () => F.formularioDevolucion(ctx, acciones);
+        } else resumenP.innerHTML = '';
         const q = normalizar(estado.texto);
         const lista = filas[t]().filter((f) => !q || normalizar(`${f.titulo} ${f.sub} ${f.nota || ''} ${nombreMes(f.fecha.slice(0, 7))} ${f.valor}`).includes(q))
           .sort((a, b) => b.fecha.localeCompare(a.fecha));
         const meses = [...new Set(lista.map((f) => f.fecha.slice(0, 7)))];
         raiz.querySelector('#lista-mov').innerHTML = meses.map((m) => {
           const delMes = lista.filter((f) => f.fecha.startsWith(m));
-          return `<section><div class="titulo-seccion"><h2>${nombreMes(m)}</h2><span class="valor">${pesos(delMes.reduce((s, f) => s + f.valor, 0))}</span></div>
-            <ul class="lista tarjeta">${delMes.map((f) => `<li class="fila tocable" data-id="${f.id}"><div><span class="principal-texto">${esc(f.titulo)}</span><span class="secundario-texto">${fechaCorta(f.fecha)} · ${esc(f.sub)}</span>${f.nota ? `<span class="nota-fila">${esc(f.nota)}</span>` : ''}${f.devolver ? '<button class="boton-texto izquierda" data-devolver>Marcar como devuelto</button>' : ''}</div>
+          return `<section><div class="titulo-seccion"><h2>${nombreMes(m)}</h2><span class="valor">${pesos(delMes.filter((f) => !f.esDevolucion).reduce((s, f) => s + f.valor, 0))}</span></div>
+            <ul class="lista tarjeta">${delMes.map((f) => `<li class="fila tocable" data-id="${f.id}"><div><span class="principal-texto">${esc(f.titulo)}</span><span class="secundario-texto">${fechaCorta(f.fecha)} · ${esc(f.sub)}</span>${f.nota ? `<span class="nota-fila">${esc(f.nota)}</span>` : ''}</div>
             <div class="derecha"><span class="valor ${f.signo}">${pesos(f.valor)}</span>${f.chip}</div></li>`).join('')}</ul></section>`;
         }).join('') || '<p class="vacio-lista">No hay movimientos que coincidan.</p>';
-        raiz.querySelectorAll('#lista-mov [data-id]').forEach((f) => f.onclick = (e) => abrirRegistro(t, f.dataset.id, Boolean(e.target.closest('[data-devolver]'))));
+        raiz.querySelectorAll('#lista-mov [data-id]').forEach((f) => f.onclick = () => abrirRegistro(t, f.dataset.id));
       };
       raiz.querySelector('#nuevo-mov').onclick = () => {
         const t = raiz.querySelector('.segmento[aria-selected="true"]').dataset.tipo;
@@ -392,7 +422,7 @@ export function vistaAjustes(ctx, ir, estado, acciones) {
         <div class="linea"><span>Cálculo de deuda desde</span><span>${fechaCorta(cfg.inicioControlDeuda)}</span></div>
         <div class="linea"><span>Abrir con Face ID</span><span class="secundario-texto">Etapa 3d</span></div>
       </section>
-      <p class="nota">Versión 0.2 (etapa 3b). Tus datos se guardan solo en este iPhone.</p>`,
+      <p class="nota">Versión 0.2.2 (etapa 3b + devoluciones por partes). Tus datos se guardan solo en este iPhone.</p>`,
     async alMontar(raiz) {
       const pintarCopias = async () => {
         const copias = await listarCopias();

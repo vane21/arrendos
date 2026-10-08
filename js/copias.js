@@ -44,15 +44,18 @@ export function comprobarCopia(copia) {
   copia.pagos.forEach((p) => { if (!contratos.has(p.arrendamientoId) || !inmuebles.has(p.inmuebleId) || !cuentas.has(p.cuentaId)) malos.push(`el pago del ${p.fecha}`); });
   copia.gastos.forEach((g) => { if (!cuentas.has(g.cuentaId) || (g.inmuebleId && !inmuebles.has(g.inmuebleId))) malos.push(`el gasto del ${g.fecha}`); });
   copia.prestamos.forEach((x) => { if (!cuentas.has(x.cuentaSalidaId) || (x.cuentaDevolucionId && !cuentas.has(x.cuentaDevolucionId))) malos.push(`el préstamo del ${x.fecha}`); });
+  if (copia.devoluciones != null && !Array.isArray(copia.devoluciones)) throw new ErrorCopia('La copia está incompleta: faltan datos. No se cambió nada.');
+  (copia.devoluciones || []).forEach((d) => { if (!cuentas.has(d.cuentaId)) malos.push(`la devolución del ${d.fecha}`); });
   if (malos.length) throw new ErrorCopia(`La copia tiene datos que no cuadran (${malos.slice(0, 3).join(', ')}). No se cambió nada.`);
   return true;
 }
 
-export const conteos = (d) => Object.fromEntries(LISTAS.map((l) => [l, d[l].length]));
+export const conteos = (d) => Object.fromEntries([...LISTAS, 'devoluciones'].map((l) => [l, (d[l] || []).length]));
 
 function datosDesdeCopia(copia) {
   const datos = structuredClone(copia);
   for (const k of ['formato', 'version', 'tipo', 'descripcion', 'creadoEn', 'conteos']) delete datos[k];
+  datos.devoluciones ??= [];
   return datos;
 }
 

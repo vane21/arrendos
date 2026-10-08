@@ -109,6 +109,33 @@ export function alertaFinContrato(c, hoyStr, diasAlerta = 5) {
   return { dias, alerta: '' };
 }
 
+// ---------- Préstamos y devoluciones ----------
+// Las devoluciones no se amarran a un préstamo ni a la cuenta de donde salió: son abonos a la deuda total.
+// Se reparten en orden, cubriendo primero los préstamos más antiguos (solo para mostrar cuánto falta de cada uno).
+export function estadoPrestamos(datos) {
+  const devoluciones = datos.devoluciones || [];
+  const totalDevuelto = suma(devoluciones);
+  const pendientes = datos.prestamos
+    .map((x, i) => ({ x, i }))
+    .filter(({ x }) => x.estado === 'pendiente')
+    .sort((a, b) => a.x.fecha.localeCompare(b.x.fecha) || a.i - b.i);
+  let disponible = totalDevuelto;
+  const porId = {};
+  for (const { x } of pendientes) {
+    const abonado = Math.min(disponible, x.valor);
+    disponible -= abonado;
+    porId[x.id] = { abonado, falta: x.valor - abonado, cubierto: abonado === x.valor };
+  }
+  const prestadoPendiente = suma(pendientes, ({ x }) => x.valor);
+  return {
+    porId,
+    totalDevuelto,
+    porDevolver: Math.max(prestadoPendiente - totalDevuelto, 0),
+    sobrante: Math.max(totalDevuelto - prestadoPendiente, 0),
+    pendientes: pendientes.filter(({ x }) => !porId[x.id].cubierto).length,
+  };
+}
+
 // ---------- Hoja Resumen ----------
 // Con hoy, el arriendo esperado cuenta solo contratos no finalizados (el Excel tenía una fila por contrato vigente).
 // Sin hoy, suma todos los contratos, exactamente como la fórmula del Excel (se usa para validar la importación).
@@ -117,7 +144,8 @@ export function resumen(datos, hoy = null) {
   const vigentes = hoy ? datos.arrendamientos.filter((c) => c.fechaFin >= hoy) : datos.arrendamientos;
   const recaudado = suma(pagos);
   const totalGastos = suma(gastos);
-  const pendiente = suma(prestamos.filter((x) => x.estado === 'pendiente'));
+  const P = estadoPrestamos(datos);
+  const pendiente = P.porDevolver;
   const porInmueble = Object.fromEntries(
     datos.inmuebles.map((i) => [i.id, suma(pagos.filter((p) => p.inmuebleId === i.id))]));
   const cat = (c) => suma(gastos.filter((g) => (g.categoria || null) === c));
@@ -126,7 +154,7 @@ export function resumen(datos, hoy = null) {
     totalRecaudadoHistorico: recaudado,
     totalGastosHistorico: totalGastos,
     totalPrestado: suma(prestamos),
-    prestamosDevueltos: suma(prestamos.filter((x) => x.estado === 'pagado')),
+    prestamosDevueltos: suma(prestamos.filter((x) => x.estado === 'pagado')) + P.totalDevuelto,
     prestamosPendientes: pendiente,
     balanceNeto: recaudado - totalGastos - pendiente,
     recaudadoPorInmueble: porInmueble,
@@ -142,12 +170,15 @@ export function resumen(datos, hoy = null) {
 export function dondeEstaElDinero(datos) {
   const corte = aFecha(datos.configuracion.fechaCorte);
   const despues = (iso) => aFecha(iso) > corte;
-  const devuelto = (x) => x.estado === 'pagado' && x.fechaDevolucion && aFecha(x.fechaDevolucion) >= corte;
+  const desdeCorte = (iso) => aFecha(iso) >= corte;
+  const devuelto = (x) => x.estado === 'pagado' && x.fechaDevolucion && desdeCorte(x.fechaDevolucion);
+  const devoluciones = datos.devoluciones || [];
   const cuentas = [...datos.cuentas].sort((a, b) => a.orden - b.orden).map((c) => {
     const recibido = suma(datos.pagos.filter((p) => p.cuentaId === c.id && despues(p.fecha)));
     const gastado = suma(datos.gastos.filter((g) => g.cuentaId === c.id && despues(g.fecha)));
     const prestado = suma(datos.prestamos.filter((x) => x.cuentaSalidaId === c.id && despues(x.fecha)));
-    const dev = suma(datos.prestamos.filter((x) => x.cuentaDevolucionId === c.id && devuelto(x)));
+    const dev = suma(datos.prestamos.filter((x) => x.cuentaDevolucionId === c.id && devuelto(x)))
+      + suma(devoluciones.filter((d) => d.cuentaId === c.id && desdeCorte(d.fecha)));
     return { id: c.id, nombre: c.nombre, saldoInicial: c.saldoInicial, recibido, gastado, prestado,
       devuelto: dev, saldoActual: c.saldoInicial + recibido - gastado - prestado + dev };
   });
@@ -156,8 +187,9 @@ export function dondeEstaElDinero(datos) {
     + suma(datos.pagos.filter((p) => despues(p.fecha)))
     - suma(datos.gastos.filter((g) => despues(g.fecha)))
     - suma(datos.prestamos.filter((x) => despues(x.fecha)))
-    + suma(datos.prestamos.filter(devuelto));
-  const pendiente = suma(datos.prestamos.filter((x) => x.estado === 'pendiente'));
+    + suma(datos.prestamos.filter(devuelto))
+    + suma(devoluciones.filter((d) => desdeCorte(d.fecha)));
+  const pendiente = estadoPrestamos(datos).porDevolver;
   return { cuentas, saldoActualTotal, comprobacionCoincide: saldoActualTotal === totalSinCuentas,
     diferenciaComprobacion: saldoActualTotal - totalSinCuentas, patrimonio: saldoActualTotal + pendiente,
     prestamosPendientes: pendiente };
@@ -194,7 +226,7 @@ export function validarImportacion(datos, esperados) {
     totalArriendoMensualEsperado: () => `Suma del valor mensual de ${datos.arrendamientos.length} contratos.`,
     totalRecaudadoHistorico: () => `Suma de ${datos.pagos.length} pagos.`,
     totalGastosHistorico: () => `Suma de ${datos.gastos.length} gastos.`,
-    prestamosPendientes: () => `Suma de ${datos.prestamos.filter((x) => x.estado === 'pendiente').length} préstamos con estado Pendiente.`,
+    prestamosPendientes: () => `Suma de ${datos.prestamos.filter((x) => x.estado === 'pendiente').length} préstamos con estado Pendiente${(datos.devoluciones || []).length ? ' menos las devoluciones' : ''}.`,
     saldoActualTotal: () => D.cuentas.map((c) => `${c.nombre} ${c.saldoActual}`).join(' · ')
       + (D.comprobacionCoincide ? '' : ` · Hay ${D.diferenciaComprobacion} en registros sin cuenta asignada.`),
     patrimonio: () => `Saldo actual ${D.saldoActualTotal} + préstamos pendientes ${R.prestamosPendientes}.`,

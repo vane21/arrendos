@@ -203,12 +203,34 @@ export function guardarPrestamo(datos, f) {
   });
 }
 
-export function marcarDevuelto(datos, id, { fechaDevolucion, cuentaDevolucionId }) {
-  const x = buscar(datos.prestamos, id, 'el préstamo');
-  return guardarPrestamo(datos, { ...x, devuelto: true, fechaDevolucion, cuentaDevolucionId });
-}
-
 export function eliminarPrestamo(datos, id) {
   buscar(datos.prestamos, id, 'el préstamo');
   datos.prestamos = datos.prestamos.filter((x) => x.id !== id);
+}
+
+// ---------- Devoluciones de préstamos ----------
+// Dinero que se devuelve a los arriendos, en una o varias partes. Solo importa a qué cuenta llega,
+// no de dónde salió el préstamo: se abona a lo que se debe en total.
+const pesosTexto = (v) => `$ ${new Intl.NumberFormat('es-CO').format(v)}`;
+
+export function guardarDevolucion(datos, f) {
+  datos.devoluciones ??= [];
+  if (f.id) buscar(datos.devoluciones, f.id, 'la devolución');
+  const fecha = fechaValida(f.fecha, 'fecha', 'la fecha de la devolución');
+  const valor = valorValido(f.valor, 'valor', 'el valor devuelto');
+  const cuentaId = cuentaValida(datos, f.cuentaId, 'cuentaId', 'a dónde llegó el dinero');
+  const prestado = datos.prestamos.filter((x) => x.estado === 'pendiente').reduce((t, x) => t + x.valor, 0);
+  const yaDevuelto = datos.devoluciones.filter((d) => d.id !== f.id).reduce((t, d) => t + d.valor, 0);
+  const porDevolver = Math.max(prestado - yaDevuelto, 0);
+  if (valor > porDevolver) {
+    throw new ErrorValidacion(porDevolver
+      ? `Solo faltan ${pesosTexto(porDevolver)} por devolver. Escribe un valor igual o menor.`
+      : 'No hay préstamos pendientes por devolver.', 'valor');
+  }
+  return guardarEn(datos.devoluciones, { id: f.id || nuevoId(), fecha, valor, cuentaId, observaciones: texto(f.observaciones) });
+}
+
+export function eliminarDevolucion(datos, id) {
+  buscar(datos.devoluciones || [], id, 'la devolución');
+  datos.devoluciones = datos.devoluciones.filter((d) => d.id !== id);
 }

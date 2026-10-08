@@ -227,36 +227,85 @@ export function formularioGasto(ctx, acciones, gasto) {
 }
 
 // ---------- Préstamo ----------
-export function formularioPrestamo(ctx, acciones, prestamo, { devolver = false } = {}) {
+export function formularioPrestamo(ctx, acciones, prestamo) {
   const x = prestamo || { fecha: ctx.hoy, motivo: 'Préstamo personal', estado: 'pendiente' };
-  const devuelto = x.estado === 'pagado' || devolver;
+  // Los préstamos que ya venían marcados como devueltos (del Excel) conservan su devolución y se pueden corregir.
+  // Para devolver dinero nuevo se usa "Registrar devolución", que no pregunta de dónde salió el préstamo.
+  const antiguoDevuelto = x.estado === 'pagado';
+  const reparto = prestamo && !antiguoDevuelto ? C.estadoPrestamos(ctx.datos).porId[prestamo.id] : null;
   abrir({
-    titulo: devolver ? 'Marcar como devuelto' : prestamo ? 'Editar préstamo' : 'Registrar préstamo',
-    ayuda: devolver ? 'Indica cuándo se devolvió y a qué cuenta volvió el dinero. Puede ser una cuenta distinta a la de salida.'
-      : 'Registra el dinero que sacas para uso personal. Se descuenta de la cuenta de salida y vuelve a sumar cuando lo marques como devuelto.',
+    titulo: prestamo ? 'Editar préstamo' : 'Registrar préstamo',
+    ayuda: 'Registra el dinero que sacas para uso personal. Se descuenta de la cuenta de salida. Cuando devuelvas dinero, usa "Registrar devolución": puedes devolver por partes o todo junto, a la cuenta que quieras.',
     cuerpo: `
+      ${reparto?.abonado ? `<p class="resultado">${reparto.cubierto ? 'Este préstamo ya quedó cubierto con las devoluciones.' : `De este préstamo ya se devolvieron ${pesos(reparto.abonado)}. Faltan ${pesos(reparto.falta)}.`}</p>` : ''}
       ${campo('Fecha', fecha('fecha', x.fecha))}
       ${campo('Motivo', entrada('motivo', x.motivo))}
       ${campo('Valor', dinero('valor', x.valor), x.detalleValor ? `En el Excel estaba escrito como ${esc(x.detalleValor)}.` : '')}
       ${campo('¿De dónde salió?', cuentas(ctx, 'cuentaSalidaId', x.cuentaSalidaId))}
-      <label class="interruptor"><input type="checkbox" name="devuelto" id="f-devuelto" ${devuelto ? 'checked' : ''}><span>Ya fue devuelto</span></label>
+      ${antiguoDevuelto ? `
+      <label class="interruptor"><input type="checkbox" name="devuelto" id="f-devuelto" checked><span>Ya fue devuelto</span></label>
       <div id="bloque-devolucion">
         ${campo('Fecha de devolución', fecha('fechaDevolucion', x.fechaDevolucion || ctx.hoy))}
         ${campo('¿A dónde volvió el dinero?', cuentas(ctx, 'cuentaDevolucionId', x.cuentaDevolucionId))}
-      </div>
+      </div>` : ''}
       ${notas(x.observaciones)}`,
-    textoGuardar: devolver ? 'Marcar como devuelto' : prestamo ? 'Guardar cambios' : 'Registrar préstamo',
+    textoGuardar: prestamo ? 'Guardar cambios' : 'Registrar préstamo',
     alGuardar: (v) => acciones.cambiar((d) => R.guardarPrestamo(d, { ...v, id: prestamo?.id }),
-      devolver ? 'Préstamo marcado como devuelto.' : prestamo ? 'Préstamo actualizado.' : 'Préstamo registrado.'),
-    eliminar: prestamo && !devolver && {
+      prestamo ? 'Préstamo actualizado.' : 'Préstamo registrado.'),
+    eliminar: prestamo && {
       texto: 'Eliminar préstamo', titulo: 'Eliminar préstamo',
       mensaje: `Se eliminará el préstamo de ${pesos(prestamo.valor)} del ${fechaCorta(prestamo.fecha)}. Antes se guardará una copia automática.`,
       accion: () => acciones.cambiar((d) => R.eliminarPrestamo(d, prestamo.id), 'Préstamo eliminado.', { copiaAntes: true }),
     },
     alMontar(form) {
       const bloque = form.querySelector('#bloque-devolucion');
+      if (!bloque) return;
       const actualizar = () => { bloque.hidden = !form.elements.devuelto.checked; };
       form.elements.devuelto.addEventListener('change', actualizar);
+      actualizar();
+    },
+  });
+}
+
+// ---------- Devolución de préstamos ----------
+export function formularioDevolucion(ctx, acciones, devolucion) {
+  const P = C.estadoPrestamos(ctx.datos);
+  const maximo = P.porDevolver + (devolucion?.valor || 0);
+  const d = devolucion || { fecha: ctx.hoy, cuentaId: '' };
+  abrir({
+    titulo: devolucion ? 'Editar devolución' : 'Registrar devolución',
+    ayuda: 'Anota el dinero que devuelves de lo que te prestaste. Puede ser una parte o todo, y llegar a cualquier cuenta: no importa de dónde salió el préstamo. Se abona primero a los préstamos más antiguos.',
+    cuerpo: `
+      <p class="resultado">Por devolver${devolucion ? ' (sin contar esta devolución)' : ''}: <b>${pesos(maximo)}</b></p>
+      ${campo('Fecha', fecha('fecha', d.fecha))}
+      ${campo('Valor devuelto', dinero('valor', d.valor))}
+      ${maximo && !devolucion ? '<button class="boton-texto izquierda" type="button" data-todo>Devolver todo</button>' : ''}
+      ${campo('¿A dónde llegó el dinero?', cuentas(ctx, 'cuentaId', d.cuentaId))}
+      ${notas(d.observaciones)}
+      <p class="resultado" id="resultado-devolucion"></p>`,
+    textoGuardar: devolucion ? 'Guardar cambios' : 'Registrar devolución',
+    alGuardar: (v) => acciones.cambiar((datos) => R.guardarDevolucion(datos, { ...v, id: devolucion?.id }),
+      devolucion ? 'Devolución actualizada.' : 'Devolución registrada.'),
+    eliminar: devolucion && {
+      texto: 'Eliminar devolución', titulo: 'Eliminar devolución',
+      mensaje: `Se eliminará la devolución de ${pesos(devolucion.valor)} del ${fechaCorta(devolucion.fecha)}. Lo prestado vuelve a quedar pendiente. Antes se guardará una copia automática.`,
+      accion: () => acciones.cambiar((datos) => R.eliminarDevolucion(datos, devolucion.id), 'Devolución eliminada.', { copiaAntes: true }),
+    },
+    alMontar(form) {
+      const valor = form.elements.valor;
+      const res = form.querySelector('#resultado-devolucion');
+      const actualizar = () => {
+        const monto = Number(valor.value.replace(/\D/g, ''));
+        if (!monto) { res.textContent = ''; return; }
+        res.textContent = monto > maximo ? `Es más de lo que se debe (${pesos(maximo)}).`
+          : monto === maximo ? 'Con esto quedan devueltos todos los préstamos.'
+            : `Después de esta devolución faltarán ${pesos(maximo - monto)}.`;
+      };
+      form.querySelector('[data-todo]')?.addEventListener('click', () => {
+        valor.value = new Intl.NumberFormat('es-CO').format(maximo);
+        actualizar();
+      });
+      valor.addEventListener('input', actualizar);
       actualizar();
     },
   });
