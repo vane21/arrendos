@@ -181,6 +181,7 @@ section.tarjeta { padding: 14px 16px; display: flex; flex-direction: column; gap
 .boton.peligro-texto { background: none; color: var(--critico); border-color: transparent; }
 .acciones-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0; }
 .acciones-panel .ancho { grid-column: 1 / -1; }
+.acciones .ancho-total { grid-column: 1 / -1; }
 .tocable { cursor: pointer; }
 .tocable:active { background: var(--superficie-2); }
 .boton-texto.izquierda { align-self: flex-start; padding-left: 0; font-size: 14px; }
